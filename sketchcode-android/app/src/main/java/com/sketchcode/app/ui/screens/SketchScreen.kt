@@ -29,7 +29,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import com.sketchcode.app.network.CodeUpdate
+import com.sketchcode.app.network.OpenFileInfo
 import com.sketchcode.app.service.VoiceState
 import com.sketchcode.app.ui.components.DrawingTool
 import com.sketchcode.app.ui.components.SketchCanvasView
@@ -37,10 +40,14 @@ import com.sketchcode.app.ui.components.SketchCanvasView
 @Composable
 fun SketchScreen(
     codeUpdate: CodeUpdate?,
+    openFiles: List<OpenFileInfo>,
+    activeFile: String,
+    codeCache: Map<String, CodeUpdate>,
     voiceState: VoiceState,
     isSending: Boolean,
     annotationSent: Boolean,
-    onSend: (Bitmap, String) -> Unit,
+    onSendAll: (List<Pair<Bitmap, String>>, String) -> Unit,
+    onFileSelect: (OpenFileInfo) -> Unit,
     onVoiceToggle: () -> Unit,
     onClearTranscription: () -> Unit,
     onDisconnect: () -> Unit,
@@ -48,6 +55,8 @@ fun SketchScreen(
 ) {
     var currentTool by remember { mutableStateOf(DrawingTool.PEN) }
     var penColor by remember { mutableIntStateOf(AndroidColor.RED) }
+    // Track whether current file has drawings (for enabling Send button reactively)
+    var hasDrawings by remember { mutableStateOf(false) }
 
     // Native view references
     var sketchViewRef by remember { mutableStateOf<SketchCanvasView?>(null) }
@@ -58,6 +67,13 @@ fun SketchScreen(
     LaunchedEffect(currentTool, penColor) {
         sketchViewRef?.currentTool = currentTool
         sketchViewRef?.penColor = penColor
+    }
+
+    // Switch canvas strokes when the active file changes
+    LaunchedEffect(activeFile) {
+        if (activeFile.isNotEmpty()) {
+            sketchViewRef?.switchToFile(activeFile)
+        }
     }
 
     Column(
@@ -97,6 +113,59 @@ fun SketchScreen(
                 modifier = Modifier.height(28.dp)
             ) {
                 Text("Disconnect", fontSize = 11.sp, color = Color(0xFFEF4444))
+            }
+        }
+
+        // ── File tabs ──
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color(0xFF2D2D30))
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 4.dp, vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (openFiles.isEmpty()) {
+                // Show the current file as a single tab when open_files hasn't arrived yet
+                codeUpdate?.let { code ->
+                    Box(
+                        modifier = Modifier
+                            .padding(horizontal = 2.dp)
+                            .clip(RoundedCornerShape(topStart = 6.dp, topEnd = 6.dp))
+                            .background(Color(0xFF1E1E1E))
+                            .padding(horizontal = 12.dp, vertical = 8.dp)
+                    ) {
+                        Text(
+                            code.filename,
+                            fontSize = 12.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = Color(0xFFFFFFFF),
+                            maxLines = 1
+                        )
+                    }
+                }
+            } else {
+                openFiles.forEach { file ->
+                    val isActive = file.filename == activeFile
+                    Box(
+                        modifier = Modifier
+                            .padding(horizontal = 2.dp)
+                            .clip(RoundedCornerShape(topStart = 6.dp, topEnd = 6.dp))
+                            .background(
+                                if (isActive) Color(0xFF1E1E1E) else Color.Transparent
+                            )
+                            .clickable { onFileSelect(file) }
+                            .padding(horizontal = 12.dp, vertical = 8.dp)
+                    ) {
+                        Text(
+                            file.filename,
+                            fontSize = 12.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = if (isActive) Color(0xFFFFFFFF) else Color(0xFF858585),
+                            maxLines = 1
+                        )
+                    }
+                }
             }
         }
 
@@ -153,6 +222,11 @@ fun SketchScreen(
                     sketchViewRef = sketchView
                     containerRef = this
                     innerFrameRef = innerFrame
+
+                    // Wire up stroke change callback to update Compose state
+                    sketchView.onStrokesChanged = {
+                        hasDrawings = sketchView.hasAnyAnnotations()
+                    }
                 }
             },
             update = { frameLayout ->
@@ -278,18 +352,69 @@ fun SketchScreen(
                     }
                 }
 
-                // SEND button
+                // SEND button — captures all annotated files
                 Button(
                     onClick = {
-                        innerFrameRef?.let { frame ->
-                            val bitmap = captureFullContent(frame, sketchViewRef)
-                            if (bitmap != null) {
-                                onSend(bitmap, voiceState.transcription)
-                                sketchViewRef?.clearCanvas()
+                        val sketch = sketchViewRef
+                        val frame = innerFrameRef
+                        val codeTextView = frame?.findViewWithTag<TextView>("codeText")
+                        if (sketch != null && frame != null && codeTextView != null) {
+                            val annotatedFiles = sketch.getAnnotatedFiles()
+                            val captures = mutableListOf<Pair<Bitmap, String>>()
+
+                            if (annotatedFiles.isNotEmpty()) {
+                                // Save the original code text so we can restore it
+                                val originalText = codeTextView.text.toString()
+                                val originalFile = activeFile
+
+                                for (filename in annotatedFiles) {
+                                    // Switch canvas to this file's strokes
+                                    sketch.switchToFile(filename)
+
+                                    // Set the code text to this file's content
+                                    val cached = codeCache[filename]
+                                    if (cached != null) {
+                                        val lines = cached.code.split("\n")
+                                        val padWidth = lines.size.toString().length
+                                        val numbered = lines.mapIndexed { i, line ->
+                                            "${(i + 1).toString().padStart(padWidth)}  $line"
+                                        }.joinToString("\n")
+                                        codeTextView.text = numbered
+                                    }
+
+                                    // Force layout so the view dimensions are correct
+                                    frame.measure(
+                                        android.view.View.MeasureSpec.makeMeasureSpec(frame.width, android.view.View.MeasureSpec.EXACTLY),
+                                        android.view.View.MeasureSpec.makeMeasureSpec(0, android.view.View.MeasureSpec.UNSPECIFIED)
+                                    )
+                                    frame.layout(frame.left, frame.top, frame.right, frame.top + frame.measuredHeight)
+
+                                    val bitmap = captureFullContent(frame, sketch)
+                                    if (bitmap != null) {
+                                        captures.add(Pair(bitmap, filename))
+                                    }
+
+                                    // Clear this file's strokes after capture
+                                    sketch.clearCanvas()
+                                }
+
+                                // Restore the original active file
+                                sketch.switchToFile(originalFile)
+                                codeTextView.text = originalText
+                            } else if (voiceState.transcription.isNotEmpty()) {
+                                // Voice-only: capture current file as-is
+                                val bitmap = captureFullContent(frame, sketch)
+                                if (bitmap != null) {
+                                    captures.add(Pair(bitmap, activeFile))
+                                }
+                            }
+
+                            if (captures.isNotEmpty()) {
+                                onSendAll(captures, voiceState.transcription)
                             }
                         }
                     },
-                    enabled = !isSending && codeUpdate != null,
+                    enabled = !isSending && codeUpdate != null && (hasDrawings || voiceState.transcription.isNotEmpty()),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = when {
                             annotationSent -> Color(0xFF22C55E)

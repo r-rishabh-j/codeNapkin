@@ -207,4 +207,6 @@ marimo/_lsp/
 __marimo__/
 
 
+*.vsix
+
 node_modules/

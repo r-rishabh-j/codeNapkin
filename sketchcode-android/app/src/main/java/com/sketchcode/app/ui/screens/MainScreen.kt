@@ -10,6 +10,7 @@ import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.sketchcode.app.AppScreen
 import com.sketchcode.app.MainViewModel
+import com.sketchcode.app.network.OpenFileInfo
 import com.sketchcode.app.service.VoiceRecorderService
 
 @Composable
@@ -59,13 +60,17 @@ fun MainScreen(
         AppScreen.SKETCH -> {
             SketchScreen(
                 codeUpdate = state.currentCode,
+                openFiles = state.openFiles,
+                activeFile = state.activeFile,
+                codeCache = viewModel.codeCache,
                 voiceState = voiceState,
                 isSending = state.sendingAnnotation,
                 annotationSent = state.annotationSent,
-                onSend = { bitmap, voice ->
-                    viewModel.sendAnnotation(bitmap, voice)
+                onSendAll = { captures, voice ->
+                    viewModel.sendAnnotations(captures, voice)
                     voiceRecorder.clearTranscription()
                 },
+                onFileSelect = { file -> viewModel.selectFile(file) },
                 onVoiceToggle = { voiceRecorder.toggle() },
                 onClearTranscription = { voiceRecorder.clearTranscription() },
                 onDisconnect = { viewModel.disconnect() },

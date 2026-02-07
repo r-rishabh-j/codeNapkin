@@ -15,6 +15,16 @@ data class CodeUpdate(
     val timestamp: Long
 )
 
+data class OpenFileInfo(
+    val filename: String,
+    val fullPath: String
+)
+
+data class OpenFilesUpdate(
+    val files: List<OpenFileInfo>,
+    val activeFile: String
+)
+
 class SketchCodeClient(
     private val host: String,
     private val port: Int,
@@ -22,6 +32,7 @@ class SketchCodeClient(
     private val onConnected: () -> Unit,
     private val onDisconnected: (String) -> Unit,
     private val onCodeUpdate: (CodeUpdate) -> Unit,
+    private val onOpenFiles: (OpenFilesUpdate) -> Unit,
     private val onError: (String) -> Unit
 ) {
     private var webSocket: WebSocket? = null
@@ -63,13 +74,25 @@ class SketchCodeClient(
         webSocket = null
     }
 
-    fun sendAnnotation(sketchImageBase64: String, voiceTranscription: String, codeSnapshotTimestamp: Long) {
+    fun sendFileSelect(filename: String, fullPath: String) {
+        val msg = mapOf(
+            "type" to "file_select",
+            "payload" to mapOf(
+                "filename" to filename,
+                "fullPath" to fullPath
+            )
+        )
+        webSocket?.send(gson.toJson(msg))
+    }
+
+    fun sendAnnotation(sketchImageBase64: String, voiceTranscription: String, codeSnapshotTimestamp: Long, filename: String) {
         val msg = mapOf(
             "type" to "annotation",
             "payload" to mapOf(
                 "sketchImageBase64" to sketchImageBase64,
                 "voiceTranscription" to voiceTranscription,
                 "codeSnapshotTimestamp" to codeSnapshotTimestamp,
+                "filename" to filename,
                 "timestamp" to System.currentTimeMillis()
             )
         )
@@ -99,6 +122,19 @@ class SketchCodeClient(
                         timestamp = payload.get("timestamp")?.asLong ?: 0
                     )
                     mainHandler.post { onCodeUpdate(update) }
+                }
+                "open_files" -> {
+                    val payload = json.getAsJsonObject("payload")
+                    val filesArray = payload.getAsJsonArray("files")
+                    val files = filesArray.map { el ->
+                        val obj = el.asJsonObject
+                        OpenFileInfo(
+                            filename = obj.get("filename")?.asString ?: "",
+                            fullPath = obj.get("fullPath")?.asString ?: ""
+                        )
+                    }
+                    val activeFile = payload.get("activeFile")?.asString ?: ""
+                    mainHandler.post { onOpenFiles(OpenFilesUpdate(files, activeFile)) }
                 }
             }
         } catch (e: Exception) {

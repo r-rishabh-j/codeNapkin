@@ -5,6 +5,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.sketchcode.app.network.SketchCodeClient
 import com.sketchcode.app.network.CodeUpdate
+import com.sketchcode.app.network.OpenFileInfo
+import com.sketchcode.app.network.OpenFilesUpdate
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -28,6 +30,8 @@ data class AppState(
     val connected: Boolean = false,
     val connecting: Boolean = false,
     val currentCode: CodeUpdate? = null,
+    val openFiles: List<OpenFileInfo> = emptyList(),
+    val activeFile: String = "",
     val sendingAnnotation: Boolean = false,
     val annotationSent: Boolean = false,
     val error: String? = null
@@ -38,6 +42,9 @@ class MainViewModel : ViewModel() {
     val state: StateFlow<AppState> = _state.asStateFlow()
 
     private var client: SketchCodeClient? = null
+
+    /** Code content cached per filename, so we can capture annotated files that aren't active */
+    val codeCache = mutableMapOf<String, CodeUpdate>()
 
     fun onQrScanned(url: String) {
         val info = parseConnectionUrl(url) ?: run {
@@ -73,7 +80,14 @@ class MainViewModel : ViewModel() {
                 )
             },
             onCodeUpdate = { code ->
+                codeCache[code.filename] = code
                 _state.value = _state.value.copy(currentCode = code)
+            },
+            onOpenFiles = { update ->
+                _state.value = _state.value.copy(
+                    openFiles = update.files,
+                    activeFile = update.activeFile
+                )
             },
             onError = { error ->
                 _state.value = _state.value.copy(
@@ -85,37 +99,47 @@ class MainViewModel : ViewModel() {
         client?.connect()
     }
 
+    fun selectFile(file: OpenFileInfo) {
+        client?.sendFileSelect(file.filename, file.fullPath)
+    }
+
     fun disconnect() {
         client?.disconnect()
         client = null
         _state.value = AppState()
     }
 
-    fun sendAnnotation(bitmap: Bitmap, voiceText: String) {
+    /**
+     * Send annotations for multiple files. Each entry is a (bitmap, filename) pair.
+     * Voice text is attached to the first annotation only.
+     */
+    fun sendAnnotations(captures: List<Pair<Bitmap, String>>, voiceText: String) {
         if (_state.value.sendingAnnotation) return
-        val currentCode = _state.value.currentCode ?: return
+        if (captures.isEmpty()) return
 
         _state.value = _state.value.copy(sendingAnnotation = true)
 
         viewModelScope.launch {
             try {
-                // Convert bitmap to base64 JPEG (much smaller than PNG for screenshots)
-                val baos = ByteArrayOutputStream()
-                bitmap.compress(Bitmap.CompressFormat.JPEG, 80, baos)
-                val base64 = Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP)
+                for ((i, entry) in captures.withIndex()) {
+                    val (bitmap, filename) = entry
+                    val baos = ByteArrayOutputStream()
+                    bitmap.compress(Bitmap.CompressFormat.JPEG, 80, baos)
+                    val base64 = Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP)
 
-                client?.sendAnnotation(
-                    sketchImageBase64 = base64,
-                    voiceTranscription = voiceText,
-                    codeSnapshotTimestamp = currentCode.timestamp
-                )
+                    client?.sendAnnotation(
+                        sketchImageBase64 = base64,
+                        voiceTranscription = if (i == 0) voiceText else "",
+                        codeSnapshotTimestamp = System.currentTimeMillis(),
+                        filename = filename
+                    )
+                }
 
                 _state.value = _state.value.copy(
                     sendingAnnotation = false,
                     annotationSent = true
                 )
 
-                // Reset after 2 seconds
                 kotlinx.coroutines.delay(2000)
                 _state.value = _state.value.copy(annotationSent = false)
             } catch (e: Exception) {

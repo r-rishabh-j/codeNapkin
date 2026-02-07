@@ -2,7 +2,7 @@ import WebSocket, { WebSocketServer } from 'ws';
 import * as http from 'http';
 import { EventEmitter } from 'events';
 import { validateToken } from './auth';
-import { AuthMessage, WSMessage, OutboundMessage, AnnotationMessage } from '../types';
+import { AuthMessage, WSMessage, OutboundMessage, AnnotationMessage, FileSelectMessage } from '../types';
 import { log, logError } from '../utils/logger';
 
 export interface SketchCodeWSServer extends EventEmitter {
@@ -127,6 +127,10 @@ class WSServer extends EventEmitter implements SketchCodeWSServer {
       case 'annotation':
         log(`WebSocket: Received annotation (voice: "${(msg as AnnotationMessage).payload.voiceTranscription.substring(0, 50)}...")`);
         this.emit('annotation', msg as AnnotationMessage);
+        break;
+      case 'file_select':
+        log(`WebSocket: File select from phone: ${(msg as FileSelectMessage).payload.filename}`);
+        this.emit('file_select', msg as FileSelectMessage);
         break;
       case 'status':
         log(`WebSocket: Status from phone: ${msg.payload.status}`);

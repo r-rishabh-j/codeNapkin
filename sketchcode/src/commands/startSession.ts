@@ -4,7 +4,7 @@ import { generateToken } from '../server/auth';
 import { startHttpServer } from '../server/httpServer';
 import { createWSServer, SketchCodeWSServer } from '../server/websocketServer';
 import { generateQrCode } from '../services/qrCode';
-import { captureActiveEditor } from '../services/codeCapture';
+import { captureActiveEditor, getOpenFiles } from '../services/codeCapture';
 import { annotationStore } from '../services/annotationStore';
 import {
   initSharedState,
@@ -18,11 +18,12 @@ import { showQrPanel, updateQrPanelStatus } from '../webview/qrPanel';
 import { showAnnotationPanel } from '../webview/annotationPanel';
 import { getPort, getStateFilePath } from '../utils/config';
 import { log } from '../utils/logger';
-import { AnnotationMessage, CodeUpdateMessage } from '../types';
+import { AnnotationMessage, CodeUpdateMessage, OpenFilesMessage, FileSelectMessage } from '../types';
 
 let wsServer: SketchCodeWSServer | null = null;
 let editorChangeDisposable: vscode.Disposable | null = null;
 let activeEditorDisposable: vscode.Disposable | null = null;
+let tabChangeDisposable: vscode.Disposable | null = null;
 let debounceTimer: NodeJS.Timeout | null = null;
 let sessionId: string | null = null;
 let currentCodeState: { filename: string; code: string; language: string; lineCount: number } | null = null;
@@ -66,8 +67,18 @@ export async function startSession(extensionPath: string): Promise<void> {
     st.currentCode = currentCodeState;
     writeState(st);
 
-    // Send current code immediately
+    // Send open files list + current code immediately
+    sendOpenFilesList();
     sendCodeUpdate();
+  });
+
+  // Handle file selection from phone
+  wsServer.on('file_select', (msg: FileSelectMessage) => {
+    log(`Phone requested file: ${msg.payload.fullPath}`);
+    // Open the file in VSCode and make it active — this triggers onDidChangeActiveTextEditor
+    vscode.workspace.openTextDocument(msg.payload.fullPath).then((doc) => {
+      vscode.window.showTextDocument(doc, { preview: false });
+    });
   });
 
   wsServer.on('phone_disconnected', () => {
@@ -86,11 +97,13 @@ export async function startSession(extensionPath: string): Promise<void> {
 
   // Handle annotations from phone
   wsServer.on('annotation', (msg: AnnotationMessage) => {
-    const snapshot = currentCodeState || {
-      filename: 'unknown',
-      code: '',
-      language: 'plaintext',
-      lineCount: 0,
+    // Use the filename sent by the phone, fall back to current active file
+    const annotationFilename = msg.payload.filename || currentCodeState?.filename || 'unknown';
+    const snapshot = {
+      filename: annotationFilename,
+      code: currentCodeState?.code || '',
+      language: currentCodeState?.language || 'plaintext',
+      lineCount: currentCodeState?.lineCount || 0,
     };
     const annotation = annotationStore.add({
       sketchImageBase64: msg.payload.sketchImageBase64,
@@ -109,7 +122,7 @@ export async function startSession(extensionPath: string): Promise<void> {
       id: annotation.id,
       sketchImageBase64: annotation.sketchImageBase64,
       voiceTranscription: annotation.voiceTranscription,
-      codeFilename: annotation.codeSnapshot.filename,
+      codeFilename: annotationFilename,
       codeContent: annotation.codeSnapshot.code,
       timestamp: annotation.timestamp,
     });
@@ -123,7 +136,7 @@ export async function startSession(extensionPath: string): Promise<void> {
       ? ` The user said: "${annotation.voiceTranscription}".`
       : '';
     sendToClaudeCode(
-      `New annotation received for "${snapshot.filename}".${voiceHint} ` +
+      `New annotation received for "${annotationFilename}".${voiceHint} ` +
       `Call get_pending_annotation to see the annotated screenshot(s) and make the requested changes.`
     );
 
@@ -136,7 +149,13 @@ export async function startSession(extensionPath: string): Promise<void> {
   });
 
   activeEditorDisposable = vscode.window.onDidChangeActiveTextEditor(() => {
+    sendOpenFilesList();
     sendCodeUpdate();
+  });
+
+  // Listen for tab open/close to update the file list on phone
+  tabChangeDisposable = vscode.window.tabGroups.onDidChangeTabs(() => {
+    sendOpenFilesList();
   });
 
   // Start MCP command polling
@@ -198,6 +217,20 @@ function sendCodeUpdate(): void {
   }
 }
 
+function sendOpenFilesList(): void {
+  if (!wsServer) return;
+  const { files, activeFile } = getOpenFiles();
+  log(`sendOpenFilesList: ${files.length} files, active: ${activeFile}`);
+  for (const f of files) {
+    log(`  tab: ${f.filename} (${f.fullPath})`);
+  }
+  const message: OpenFilesMessage = {
+    type: 'open_files',
+    payload: { files, activeFile },
+  };
+  wsServer.sendToPhone(message);
+}
+
 function debouncedCodeUpdate(): void {
   if (debounceTimer) clearTimeout(debounceTimer);
   debounceTimer = setTimeout(() => sendCodeUpdate(), 300);
@@ -223,5 +256,9 @@ export function clearSession(): void {
   if (activeEditorDisposable) {
     activeEditorDisposable.dispose();
     activeEditorDisposable = null;
+  }
+  if (tabChangeDisposable) {
+    tabChangeDisposable.dispose();
+    tabChangeDisposable = null;
   }
 }

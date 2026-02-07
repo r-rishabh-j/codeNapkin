@@ -31,9 +31,16 @@ class SketchCanvasView @JvmOverloads constructor(
     private val strokes = mutableListOf<Stroke>()
     private var currentStroke: Stroke? = null
 
+    /** Per-file stroke storage: filename → list of strokes */
+    private val fileStrokes = mutableMapOf<String, List<Stroke>>()
+    private var currentFile: String? = null
+
     var currentTool: DrawingTool = DrawingTool.PEN
     var penColor: Int = Color.RED
     var penWidth: Float = 6f
+
+    /** Called whenever stroke state changes (added/cleared) */
+    var onStrokesChanged: (() -> Unit)? = null
 
     private val strokePaint = Paint().apply {
         isAntiAlias = true
@@ -91,6 +98,7 @@ class SketchCanvasView @JvmOverloads constructor(
                 currentStroke?.let { stroke ->
                     if (stroke.points.size >= 2) {
                         strokes.add(stroke)
+                        onStrokesChanged?.invoke()
                     }
                 }
                 currentStroke = null
@@ -138,15 +146,65 @@ class SketchCanvasView @JvmOverloads constructor(
         canvas.drawPath(path, strokePaint)
     }
 
-    /** Clear all drawings */
+    /** Clear drawings for the current file only */
     fun clearCanvas() {
         strokes.clear()
         currentStroke = null
+        // Also remove from per-file storage
+        currentFile?.let { fileStrokes.remove(it) }
         invalidate()
+        onStrokesChanged?.invoke()
     }
 
-    /** Check if there are any drawings */
+    /** Clear drawings for a specific file */
+    fun clearFileStrokes(filename: String) {
+        fileStrokes.remove(filename)
+        if (currentFile == filename) {
+            strokes.clear()
+            currentStroke = null
+            invalidate()
+        }
+    }
+
+    /** Check if there are any drawings on the current canvas */
     fun hasDrawings(): Boolean = strokes.isNotEmpty()
+
+    /** Check if ANY file has annotations */
+    fun hasAnyAnnotations(): Boolean {
+        if (strokes.isNotEmpty()) return true
+        return fileStrokes.any { it.value.isNotEmpty() }
+    }
+
+    /** Get list of filenames that have annotations */
+    fun getAnnotatedFiles(): List<String> {
+        // Save current strokes first so the map is up to date
+        currentFile?.let {
+            if (strokes.isNotEmpty()) {
+                fileStrokes[it] = strokes.toList()
+            }
+        }
+        return fileStrokes.filter { it.value.isNotEmpty() }.keys.toList()
+    }
+
+    /**
+     * Switch to a different file — saves current strokes and restores the target file's strokes.
+     */
+    fun switchToFile(filename: String) {
+        if (filename == currentFile) return
+        // Save current file's strokes
+        currentFile?.let {
+            fileStrokes[it] = strokes.toList()
+        }
+        // Restore target file's strokes (or empty)
+        strokes.clear()
+        currentStroke = null
+        fileStrokes[filename]?.let { saved ->
+            strokes.addAll(saved)
+        }
+        currentFile = filename
+        invalidate()
+        onStrokesChanged?.invoke()
+    }
 
     /**
      * Get the bounding rectangle of all strokes (annotation region).
