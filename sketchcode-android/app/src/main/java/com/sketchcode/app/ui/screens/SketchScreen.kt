@@ -38,6 +38,7 @@ fun SketchScreen(
     annotationSent: Boolean,
     onSend: (Bitmap, String) -> Unit,
     onVoiceToggle: () -> Unit,
+    onClearTranscription: () -> Unit,
     onDisconnect: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -223,10 +224,6 @@ fun SketchScreen(
                 ToolChip("✏️", currentTool == DrawingTool.PEN) {
                     currentTool = DrawingTool.PEN
                 }
-                // Eraser
-                ToolChip("⌫", currentTool == DrawingTool.ERASER) {
-                    currentTool = DrawingTool.ERASER
-                }
                 // Color dots
                 listOf(
                     AndroidColor.RED,
@@ -269,6 +266,13 @@ fun SketchScreen(
                     isActive = voiceState.isRecording,
                     activeColor = Color(0xFFB91C1C)
                 ) { onVoiceToggle() }
+
+                // Clear transcription
+                if (voiceState.transcription.isNotEmpty()) {
+                    ToolChip("✕", false) {
+                        onClearTranscription()
+                    }
+                }
 
                 // SEND button
                 Button(

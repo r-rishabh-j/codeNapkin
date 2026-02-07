@@ -19,7 +19,7 @@ class WhisperTokenizer(context: Context) {
         const val SOT = 50258          // <|startoftranscript|>
         const val EN = 50259           // <|en|>
         const val TRANSCRIBE = 50360   // <|transcribe|>
-        const val TRANSLATE = 50358    // <|translate|>
+        const val TRANSLATE = 50359    // <|translate|>
         const val NO_TIMESTAMPS = 50364 // <|notimestamps|>
         const val FIRST_TIMESTAMP = 50365
 

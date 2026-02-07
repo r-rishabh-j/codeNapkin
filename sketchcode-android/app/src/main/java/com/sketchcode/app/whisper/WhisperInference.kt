@@ -15,27 +15,23 @@ import java.nio.IntBuffer
 import java.nio.ShortBuffer
 
 /**
- * Runs Whisper-Large-V3-Turbo inference using ONNX Runtime with QNN Execution Provider
- * for Snapdragon NPU acceleration.
+ * Runs Whisper-Large-V3-Turbo inference using ONNX Runtime with QNN Execution Provider.
  *
- * The Qualcomm AI Hub models use FLOAT16 tensors and a KV-cache decoder architecture:
+ * The Qualcomm AI Hub model converts linear layers to Conv2D (NCHW layout).
+ * The self-attention KV cache uses a SLIDING WINDOW of fixed size 199:
+ *   - Each step, the model concatenates new key/value, then drops index 0 (oldest)
+ *   - The attention mask unmasks from the RIGHT side (position 199 first, then 198, etc.)
+ *   - Mask value 0.0 = attend, -100.0 (or -inf) = mask
  *
- * Encoder inputs:
- *   input_features: fp16 [1, 128, 3000]
- * Encoder outputs:
- *   k_cache_cross_0..3, v_cache_cross_0..3: fp16 cross-attention KV caches
- *
- * Decoder inputs (per step, single-token):
- *   input_ids: int32 [1, 1]
- *   attention_mask: fp16 [1, 1, 1, 200]
- *   position_ids: int32 [1]
- *   k_cache_self_{0..3}_in: fp16 [20, 1, 64, 199]
- *   v_cache_self_{0..3}_in: fp16 [20, 1, 199, 64]
- *   k_cache_cross_{0..3}: fp16 [20, 1, 64, 1500]
- *   v_cache_cross_{0..3}: fp16 [20, 1, 1500, 64]
- * Decoder outputs:
- *   logits: fp16 [1, 51866, 1, 1]
- *   k_cache_self_{0..3}_out, v_cache_self_{0..3}_out
+ * Decoder input/output shapes (all fp16 on QNN):
+ *   input_ids:        int32 [1, 1]
+ *   attention_mask:    fp16 [1, 1, 1, 200]     — unmask right-to-left
+ *   position_ids:      int32 [1]
+ *   k_cache_self_*_in: fp16 [20, 1, 64, 199]   — sliding window
+ *   v_cache_self_*_in: fp16 [20, 1, 199, 64]
+ *   k_cache_cross_*:   fp16 [20, 1, 64, 1500]  — from encoder, constant
+ *   v_cache_cross_*:   fp16 [20, 1, 1500, 64]
+ *   logits:            fp16 [1, 51866, 1, 1]    — NCHW, argmax on dim 1
  */
 class WhisperInference(
     private val modelManager: ModelManager,
@@ -47,12 +43,16 @@ class WhisperInference(
         private const val N_FRAMES = 3000
         private const val MAX_TOKENS = 200
         private const val VOCAB_SIZE = 51866
-        private const val N_LAYERS = 4    // Whisper-Large-V3-Turbo has 4 decoder layers
+        private const val N_LAYERS = 4
         private const val N_HEADS = 20
         private const val HEAD_DIM = 64
         private const val ENCODER_SEQ = 1500
-        private const val MAX_DEC_SEQ = 199
-        private const val ATTN_MASK_SIZE = MAX_DEC_SEQ + 1  // 200
+        private const val CACHE_LEN = 199        // MEAN_DECODE_LEN - 1
+        private const val ATTN_MASK_SIZE = 200    // MEAN_DECODE_LEN
+        // Mask value for "don't attend": Qualcomm uses -100.0, but -inf also works
+        // In fp16: -100.0 = 0xD640, -inf = 0xFC00
+        private const val MASK_NEG_FP16: Short = 0xD640.toShort()  // fp16 for -100.0
+        private const val MASK_ZERO_FP16: Short = 0x0000           // fp16 for 0.0
     }
 
     private var env: OrtEnvironment? = null
@@ -108,7 +108,6 @@ class WhisperInference(
         // === Step 1: Encoder ===
         val startEnc = System.currentTimeMillis()
 
-        // Convert mel float32 → float16 using ORT's Fp16Conversions utility
         val melFp16 = Fp16Conversions.convertFloatBufferToFp16Buffer(FloatBuffer.wrap(mel))
         val melTensor = OnnxTensor.createTensor(
             env, melFp16, longArrayOf(1, N_MELS.toLong(), N_FRAMES.toLong()),
@@ -121,23 +120,23 @@ class WhisperInference(
         val encTime = System.currentTimeMillis() - startEnc
         Log.i(TAG, "Encoder inference: ${encTime}ms")
 
-        // Collect encoder outputs (cross-attention KV caches) — these stay constant
+        // Collect cross-attention KV caches (constant across all decoder steps)
         val crossCaches = mutableMapOf<String, OnnxTensor>()
         for (name in encoder.outputNames) {
             crossCaches[name] = encoderResults.get(name).get() as OnnxTensor
         }
         Log.i(TAG, "Encoder outputs: ${crossCaches.keys}")
 
-        // === Step 2: Autoregressive decoder with KV cache ===
+        // === Step 2: Autoregressive decoder with sliding window KV cache ===
         val startDec = System.currentTimeMillis()
 
-        // Shape constants
-        val kCacheSelfShape = longArrayOf(N_HEADS.toLong(), 1, HEAD_DIM.toLong(), MAX_DEC_SEQ.toLong())
-        val vCacheSelfShape = longArrayOf(N_HEADS.toLong(), 1, MAX_DEC_SEQ.toLong(), HEAD_DIM.toLong())
-        val kCacheSelfSize = N_HEADS * HEAD_DIM * MAX_DEC_SEQ
-        val vCacheSelfSize = N_HEADS * MAX_DEC_SEQ * HEAD_DIM
+        // Self-attention cache shapes
+        val kCacheSelfShape = longArrayOf(N_HEADS.toLong(), 1, HEAD_DIM.toLong(), CACHE_LEN.toLong())
+        val vCacheSelfShape = longArrayOf(N_HEADS.toLong(), 1, CACHE_LEN.toLong(), HEAD_DIM.toLong())
+        val kCacheSelfSize = N_HEADS * HEAD_DIM * CACHE_LEN
+        val vCacheSelfSize = N_HEADS * CACHE_LEN * HEAD_DIM
 
-        // Initialize self-attention KV caches to zeros (fp16)
+        // Initialize caches to zeros
         var selfKCaches = Array(N_LAYERS) { createZeroFp16Tensor(env, kCacheSelfShape, kCacheSelfSize) }
         var selfVCaches = Array(N_LAYERS) { createZeroFp16Tensor(env, vCacheSelfShape, vCacheSelfSize) }
 
@@ -157,7 +156,6 @@ class WhisperInference(
             if (step >= allTokens.size) break
             val currentToken = allTokens[step]
 
-            // Build decoder inputs
             val inputs = mutableMapOf<String, OnnxTensor>()
 
             // input_ids: int32 [1, 1]
@@ -170,10 +168,14 @@ class WhisperInference(
                 env, IntBuffer.wrap(intArrayOf(position)), longArrayOf(1)
             )
 
-            // attention_mask: fp16 [1, 1, 1, 200] — causal mask
-            inputs["attention_mask"] = createAttentionMask(env, position)
+            // attention_mask: fp16 [1, 1, 1, 200]
+            // Sliding window: unmask from the RIGHT side.
+            // Step 0: unmask position 199 only
+            // Step 1: unmask positions 198-199
+            // Step n: unmask positions (199-n)..199
+            inputs["attention_mask"] = createAttentionMask(env, step)
 
-            // Self-attention KV caches (updated each step)
+            // Self-attention KV caches
             for (layer in 0 until N_LAYERS) {
                 inputs["k_cache_self_${layer}_in"] = selfKCaches[layer]
                 inputs["v_cache_self_${layer}_in"] = selfVCaches[layer]
@@ -185,12 +187,10 @@ class WhisperInference(
                 inputs["v_cache_cross_$layer"] = crossCaches["v_cache_cross_$layer"]!!
             }
 
-            // Log missing inputs on first step
             if (step == 0) {
                 val missing = decoder.inputNames.filter { it !in inputs }
                 if (missing.isNotEmpty()) {
                     Log.e(TAG, "Missing decoder inputs: $missing")
-                    Log.e(TAG, "Provided: ${inputs.keys}")
                 } else {
                     Log.i(TAG, "All ${inputs.size} decoder inputs provided")
                 }
@@ -199,39 +199,67 @@ class WhisperInference(
             try {
                 val decoderResults = decoder.run(inputs)
 
-                // Extract logits: fp16 [1, 51866, 1, 1]
-                // Use getFloatBuffer() which auto-converts fp16 → float32
+                // Extract logits: fp16 [1, 51866, 1, 1] (NCHW from Conv2D)
+                // Vocab is on dimension 1 (channel dim). Flattened buffer = 51866 values.
                 val logitsTensor = decoderResults.get("logits").get() as OnnxTensor
+                val logits: FloatArray
+
                 val logitsFloat = logitsTensor.floatBuffer
-                if (logitsFloat == null) {
-                    // Fallback: manually convert via ShortBuffer
-                    Log.w(TAG, "getFloatBuffer() returned null, using manual conversion")
-                    val fp16Buf = logitsTensor.shortBuffer
-                    val logits = fp16ShortBufferToFloatArray(fp16Buf, VOCAB_SIZE)
-                    processDecoderStep(logits, step, promptTokens, generatedTokens, allTokens, decoderResults, inputs, selfKCaches, selfVCaches).also {
-                        selfKCaches = it.first
-                        selfVCaches = it.second
-                    }
-                } else {
-                    // Extract float32 logits — shape is [1, 51866, 1, 1], we need the first 51866 values
-                    val logits = FloatArray(VOCAB_SIZE)
+                if (logitsFloat != null) {
+                    logits = FloatArray(VOCAB_SIZE)
                     logitsFloat.rewind()
                     logitsFloat.get(logits)
-                    processDecoderStep(logits, step, promptTokens, generatedTokens, allTokens, decoderResults, inputs, selfKCaches, selfVCaches).also {
-                        selfKCaches = it.first
-                        selfVCaches = it.second
-                    }
+                } else {
+                    val fp16Buf = logitsTensor.shortBuffer
+                    logits = fp16ShortBufferToFloatArray(fp16Buf, VOCAB_SIZE)
                 }
+
+                // Greedy argmax over vocab dimension
+                val nextToken = argmax(logits)
+
+                // Log top-k for debugging on first few steps
+                if (step < 6) {
+                    val topK = logits.indices.sortedByDescending { logits[it] }.take(5)
+                    val topStr = topK.joinToString { "[$it]=${String.format("%.2f", logits[it])}" }
+                    Log.i(TAG, "Step $step (pos=$position): input=$currentToken → next=$nextToken " +
+                            "(${if (nextToken < WhisperTokenizer.FIRST_SPECIAL) tokenizer.decode(listOf(nextToken)) else "<special:$nextToken>"}) " +
+                            "top5: $topStr")
+                }
+
+                // Clean up per-step tensors
+                inputs["input_ids"]?.close()
+                inputs["position_ids"]?.close()
+                inputs["attention_mask"]?.close()
+
+                // Extract updated self-attention KV caches (sliding window: oldest dropped)
+                val newKCaches = Array(N_LAYERS) { layer ->
+                    decoderResults.get("k_cache_self_${layer}_out").get() as OnnxTensor
+                }
+                val newVCaches = Array(N_LAYERS) { layer ->
+                    decoderResults.get("v_cache_self_${layer}_out").get() as OnnxTensor
+                }
+
+                // Close old caches
+                selfKCaches.forEach { it.close() }
+                selfVCaches.forEach { it.close() }
+                selfKCaches = newKCaches
+                selfVCaches = newVCaches
 
                 position++
 
-                // During prompt phase, don't collect output tokens
+                // During prompt phase (steps 0..2), just advance — don't collect output
                 if (step < promptTokens.size - 1) continue
 
-                // Check last generated token for EOT
-                if (generatedTokens.isNotEmpty() || step >= promptTokens.size - 1) {
-                    val lastToken = if (step < promptTokens.size) -1 else allTokens.lastOrNull() ?: -1
-                    // EOT check happens inside processDecoderStep via the allTokens list
+                // From step (promptTokens.size - 1) onward, collect generated tokens
+                if (nextToken == WhisperTokenizer.EOT) {
+                    Log.i(TAG, "EOT at step $step (position $position)")
+                    break
+                } else if (nextToken >= WhisperTokenizer.FIRST_TIMESTAMP) {
+                    // Timestamp token — add to sequence but don't collect as text
+                    allTokens.add(nextToken)
+                } else {
+                    generatedTokens.add(nextToken)
+                    allTokens.add(nextToken)
                 }
 
             } catch (e: Exception) {
@@ -239,12 +267,6 @@ class WhisperInference(
                 inputs["input_ids"]?.close()
                 inputs["position_ids"]?.close()
                 inputs["attention_mask"]?.close()
-                break
-            }
-
-            // Check if EOT was the last token added
-            if (allTokens.size > promptTokens.size && allTokens.last() == WhisperTokenizer.EOT) {
-                Log.i(TAG, "EOT at step $step (position $position)")
                 break
             }
         }
@@ -264,72 +286,26 @@ class WhisperInference(
     }
 
     /**
-     * Process one decoder step: extract next token, update KV caches.
-     * Returns the new self KV caches.
-     */
-    private fun processDecoderStep(
-        logits: FloatArray,
-        step: Int,
-        promptTokens: IntArray,
-        generatedTokens: MutableList<Int>,
-        allTokens: MutableList<Int>,
-        decoderResults: OrtSession.Result,
-        inputs: Map<String, OnnxTensor>,
-        oldKCaches: Array<OnnxTensor>,
-        oldVCaches: Array<OnnxTensor>
-    ): Pair<Array<OnnxTensor>, Array<OnnxTensor>> {
-        // Greedy argmax
-        val nextToken = argmax(logits)
-
-        // Clean up per-step input tensors
-        inputs["input_ids"]?.close()
-        inputs["position_ids"]?.close()
-        inputs["attention_mask"]?.close()
-
-        // Extract updated self-attention KV caches
-        val newKCaches = Array(N_LAYERS) { layer ->
-            decoderResults.get("k_cache_self_${layer}_out").get() as OnnxTensor
-        }
-        val newVCaches = Array(N_LAYERS) { layer ->
-            decoderResults.get("v_cache_self_${layer}_out").get() as OnnxTensor
-        }
-
-        // Close old caches
-        oldKCaches.forEach { it.close() }
-        oldVCaches.forEach { it.close() }
-
-        // During prompt feeding, only advance position (don't collect tokens)
-        if (step >= promptTokens.size - 1) {
-            if (nextToken == WhisperTokenizer.EOT) {
-                allTokens.add(WhisperTokenizer.EOT)
-                Log.i(TAG, "Step $step: EOT")
-            } else if (nextToken >= WhisperTokenizer.FIRST_TIMESTAMP) {
-                // Skip timestamp tokens but still add to sequence
-                allTokens.add(nextToken)
-            } else {
-                generatedTokens.add(nextToken)
-                allTokens.add(nextToken)
-                if (generatedTokens.size <= 5) {
-                    Log.i(TAG, "Step $step: token=$nextToken '${tokenizer.decode(listOf(nextToken))}'")
-                }
-            }
-        }
-
-        return Pair(newKCaches, newVCaches)
-    }
-
-    /**
      * Create attention mask: fp16 [1, 1, 1, 200]
-     * Positions 0..currentPos → 0.0 (attend), positions > currentPos → -inf (mask)
+     *
+     * The Qualcomm model uses a sliding window cache. The mask unmasks from the RIGHT:
+     *   Step 0: all masked except position 199 → [mask, mask, ..., mask, 0.0]
+     *   Step 1: positions 198-199 unmasked     → [mask, mask, ..., 0.0, 0.0]
+     *   Step n: positions (199-n)..199 unmasked
+     *
+     * Mask value: -100.0 (fp16 = 0xD640), matching Qualcomm's reference implementation.
+     * Attend value: 0.0 (fp16 = 0x0000).
      */
-    private fun createAttentionMask(env: OrtEnvironment, currentPos: Int): OnnxTensor {
+    private fun createAttentionMask(env: OrtEnvironment, step: Int): OnnxTensor {
         val buf = ByteBuffer.allocateDirect(ATTN_MASK_SIZE * 2).order(ByteOrder.nativeOrder())
         val shorts = buf.asShortBuffer()
-        val zeroFp16: Short = 0x0000
-        val negInfFp16: Short = 0xFC00.toShort()
+
+        // Start fully masked, then unmask (n+1) positions from the right
+        val numUnmasked = step + 1  // step 0 → 1 unmasked, step 1 → 2, etc.
+        val firstUnmasked = ATTN_MASK_SIZE - numUnmasked  // unmask from this index to end
 
         for (i in 0 until ATTN_MASK_SIZE) {
-            shorts.put(if (i <= currentPos) zeroFp16 else negInfFp16)
+            shorts.put(if (i >= firstUnmasked) MASK_ZERO_FP16 else MASK_NEG_FP16)
         }
         shorts.rewind()
 
@@ -348,15 +324,13 @@ class WhisperInference(
         numElements: Int
     ): OnnxTensor {
         val buf = ByteBuffer.allocateDirect(numElements * 2).order(ByteOrder.nativeOrder())
-        // ByteBuffer.allocateDirect is already zeroed, but be explicit
         val shorts = buf.asShortBuffer()
         shorts.rewind()
         return OnnxTensor.createTensor(env, shorts, shape, OnnxJavaType.FLOAT16)
     }
 
     /**
-     * Fallback: manually convert fp16 ShortBuffer to float32 array
-     * using ORT's Fp16Conversions if getFloatBuffer() returns null.
+     * Fallback: manually convert fp16 ShortBuffer to float32 array.
      */
     private fun fp16ShortBufferToFloatArray(fp16: ShortBuffer, count: Int): FloatArray {
         val result = FloatArray(count)

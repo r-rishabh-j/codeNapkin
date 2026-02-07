@@ -18,6 +18,7 @@ static constexpr int N_SAMPLES = SAMPLE_RATE * CHUNK_LENGTH; // 480000
 static constexpr int N_FRAMES = N_SAMPLES / HOP_LENGTH;      // 3000
 static constexpr int FFT_SIZE = 512; // next power of 2 >= N_FFT
 static constexpr int FFT_OUT = N_FFT / 2 + 1; // 201
+static constexpr int PAD = N_FFT / 2; // 200 — center padding for STFT
 
 // ---- FFT ----
 
@@ -113,9 +114,11 @@ static void computeMelFilterbank(float* filters, int nMels, int nFft, int sample
     }
 }
 
-// ---- Hann window ----
+// ---- Hann window (periodic, matching PyTorch default) ----
 
 static void computeHannWindow(float* window, int length) {
+    // Periodic Hann: window[i] = 0.5 * (1 - cos(2*pi*i / N))
+    // This matches torch.hann_window(N, periodic=True)
     for (int i = 0; i < length; i++) {
         window[i] = 0.5f * (1.0f - cosf(2.0f * M_PI * i / length));
     }
@@ -133,17 +136,37 @@ Java_com_sketchcode_app_whisper_MelSpectrogram_nativeComputeMelSpectrogram(
 
     LOGI("Input audio: %d samples (%.2fs)", (int)audioLen, (float)audioLen / SAMPLE_RATE);
 
-    // Pad to N_SAMPLES + N_FFT to prevent buffer overflow on last STFT frame.
-    // The last frame starts at (N_FRAMES-1)*HOP_LENGTH = 479840 and reads N_FFT=400
-    // samples, accessing index 480239 which exceeds N_SAMPLES=480000.
-    // Extra N_FFT zeros ensure safe access for all frames.
-    static constexpr int PADDED_SIZE = N_SAMPLES + N_FFT; // 480400
-    std::vector<float> padded(PADDED_SIZE, 0.0f);
+    // Step 1: Pad or truncate to N_SAMPLES
+    std::vector<float> raw(N_SAMPLES, 0.0f);
     int copyLen = std::min((int)audioLen, N_SAMPLES);
-    memcpy(padded.data(), audio, copyLen * sizeof(float));
+    memcpy(raw.data(), audio, copyLen * sizeof(float));
     env->ReleaseFloatArrayElements(audioArray, audio, 0);
 
-    // Pre-compute Hann window
+    // Step 2: Apply center padding with reflection (matching torch.stft center=True)
+    // Pad PAD (=200) samples on each side using reflection
+    int paddedLen = N_SAMPLES + 2 * PAD; // 480400
+    std::vector<float> padded(paddedLen, 0.0f);
+
+    // Left reflection padding: reflect raw[1..PAD] → padded[PAD-1..0]
+    for (int i = 0; i < PAD; i++) {
+        padded[PAD - 1 - i] = raw[i + 1];
+    }
+    // Copy original
+    memcpy(padded.data() + PAD, raw.data(), N_SAMPLES * sizeof(float));
+    // Right reflection padding: reflect raw[N_SAMPLES-2..N_SAMPLES-PAD-1] → padded[N_SAMPLES+PAD..end]
+    for (int i = 0; i < PAD; i++) {
+        padded[N_SAMPLES + PAD + i] = raw[N_SAMPLES - 2 - i];
+    }
+
+    // Total frames from padded signal: (paddedLen - N_FFT) / HOP_LENGTH + 1
+    // = (480400 - 400) / 160 + 1 = 480000/160 + 1 = 3001
+    // Whisper drops the last frame: stft[..., :-1] → 3000 frames
+    int totalFrames = (paddedLen - N_FFT) / HOP_LENGTH + 1; // 3001
+    int outputFrames = std::min(totalFrames - 1, N_FRAMES);  // 3000 (drop last)
+
+    LOGI("Padded length: %d, total STFT frames: %d, output frames: %d", paddedLen, totalFrames, outputFrames);
+
+    // Pre-compute Hann window (periodic)
     float hannWindow[N_FFT];
     computeHannWindow(hannWindow, N_FFT);
 
@@ -158,15 +181,15 @@ Java_com_sketchcode_app_whisper_MelSpectrogram_nativeComputeMelSpectrogram(
     float fftRe[FFT_SIZE];
     float fftIm[FFT_SIZE];
 
-    // Process each frame
-    for (int frame = 0; frame < N_FRAMES; frame++) {
+    // Process each frame (from center-padded signal)
+    for (int frame = 0; frame < outputFrames; frame++) {
         int start = frame * HOP_LENGTH;
 
         // Zero-pad FFT buffer
         memset(fftRe, 0, FFT_SIZE * sizeof(float));
         memset(fftIm, 0, FFT_SIZE * sizeof(float));
 
-        // Apply Hann window
+        // Apply Hann window to frame from padded signal
         for (int i = 0; i < N_FFT; i++) {
             fftRe[i] = padded[start + i] * hannWindow[i];
         }
@@ -174,7 +197,7 @@ Java_com_sketchcode_app_whisper_MelSpectrogram_nativeComputeMelSpectrogram(
         // FFT
         fft(fftRe, fftIm, FFT_SIZE);
 
-        // Magnitude squared of first FFT_OUT bins
+        // Magnitude squared (power spectrogram)
         float magnitudes[FFT_OUT];
         for (int k = 0; k < FFT_OUT; k++) {
             magnitudes[k] = fftRe[k] * fftRe[k] + fftIm[k] * fftIm[k];
@@ -186,12 +209,13 @@ Java_com_sketchcode_app_whisper_MelSpectrogram_nativeComputeMelSpectrogram(
             for (int k = 0; k < FFT_OUT; k++) {
                 sum += melFilters[m * FFT_OUT + k] * magnitudes[k];
             }
-            // Log mel spectrogram
+            // Log10 mel spectrogram (clamp to avoid log(0))
             melSpec[m * N_FRAMES + frame] = log10f(fmaxf(sum, 1e-10f));
         }
     }
 
     // Normalize: clamp to (max - 8.0), then (x + 4.0) / 4.0
+    // This matches WhisperFeatureExtractor exactly
     float maxVal = *std::max_element(melSpec.begin(), melSpec.end());
     for (int i = 0; i < N_MELS * N_FRAMES; i++) {
         melSpec[i] = fmaxf(melSpec[i], maxVal - 8.0f);
@@ -202,6 +226,6 @@ Java_com_sketchcode_app_whisper_MelSpectrogram_nativeComputeMelSpectrogram(
     jfloatArray result = env->NewFloatArray(N_MELS * N_FRAMES);
     env->SetFloatArrayRegion(result, 0, N_MELS * N_FRAMES, melSpec.data());
 
-    LOGI("Mel spectrogram computed: %d frames, %d mels, input %d samples", N_FRAMES, N_MELS, copyLen);
+    LOGI("Mel spectrogram computed: %d frames, %d mels, input %d samples, max=%.3f", outputFrames, N_MELS, copyLen, maxVal);
     return result;
 }

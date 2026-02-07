@@ -67,6 +67,7 @@ fun MainScreen(
                     voiceRecorder.clearTranscription()
                 },
                 onVoiceToggle = { voiceRecorder.toggle() },
+                onClearTranscription = { voiceRecorder.clearTranscription() },
                 onDisconnect = { viewModel.disconnect() },
                 modifier = modifier
             )
