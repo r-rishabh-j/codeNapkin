@@ -5,7 +5,7 @@ Annotate code on your phone with a stylus, speak a voice command, and let Claude
 # Authors
 Ayush Bhauwala\
 Rishabh Jain\
-Suhas Morisetty\
+Suhas Morisetty
 
 ## How It Works
 
