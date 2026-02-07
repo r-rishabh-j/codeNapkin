@@ -2,6 +2,11 @@
 
 Annotate code on your phone with a stylus, speak a voice command, and let Claude Code make the edits. Built for the Snapdragon Multiverse Hackathon at Columbia University.
 
+# Authors
+Ayush Bhauwala
+Rishabh Jain
+Suhas Morisetty
+
 ## How It Works
 
 ```
@@ -73,8 +78,8 @@ Annotate code on your phone with a stylus, speak a voice command, and let Claude
 ### 1. Clone and Install
 
 ```bash
-git clone https://github.com/r-rishabh-j/sketchcode-snapdragon.git
-cd sketchcode-snapdragon
+git clone https://github.com/r-rishabh-j/codeNapkin.git
+cd codeNapkin
 ```
 
 ### 2. Build the VSCode Extension
