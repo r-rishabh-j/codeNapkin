@@ -3,9 +3,9 @@
 Annotate code on your phone with a stylus, speak a voice command, and let Claude Code make the edits. Built for the Snapdragon Multiverse Hackathon at Columbia University.
 
 # Authors
-Ayush Bhauwala
-Rishabh Jain
-Suhas Morisetty
+Ayush Bhauwala\
+Rishabh Jain\
+Suhas Morisetty\
 
 ## How It Works
 
