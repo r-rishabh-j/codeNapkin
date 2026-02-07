@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "sketchcode": {
+      "command": "node",
+      "args": ["/Users/rishabh/development/hackathon/jarvis/sketchcode/dist/mcp-server/index.js"]
+    }
+  }
+}

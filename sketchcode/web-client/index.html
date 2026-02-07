@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>SketchCode</title>
+  <link rel="stylesheet" href="css/styles.css" />
+  <!-- highlight.js for syntax highlighting -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+  <!-- html2canvas for screenshot capture -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+</head>
+<body>
+  <!-- Status bar -->
+  <div id="statusBar" class="status-bar">
+    <div class="status-dot" id="statusDot"></div>
+    <span id="statusText">Connecting...</span>
+    <span id="fileInfo" class="file-info"></span>
+  </div>
+
+  <!-- Code display + sketch overlay container -->
+  <div id="codeContainer" class="code-container">
+    <div id="codeDisplay" class="code-display">
+      <pre><code id="codeBlock" class="hljs">Waiting for code...</code></pre>
+    </div>
+    <canvas id="sketchCanvas" class="sketch-canvas"></canvas>
+  </div>
+
+  <!-- Voice transcription display -->
+  <div id="voiceDisplay" class="voice-display hidden">
+    <span class="voice-icon">&#127908;</span>
+    <span id="voiceText">Listening...</span>
+  </div>
+
+  <!-- Toolbar -->
+  <div class="toolbar">
+    <div class="tool-group">
+      <button id="penBtn" class="tool-btn active" title="Pen">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/>
+        </svg>
+      </button>
+      <button id="eraserBtn" class="tool-btn" title="Eraser">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"/>
+          <path d="M22 21H7"/>
+        </svg>
+      </button>
+      <input type="color" id="colorPicker" class="color-picker" value="#ff3333" />
+      <button id="clearBtn" class="tool-btn" title="Clear canvas">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="m19 6-.867 12.142A2 2 0 0 1 16.138 20H7.862a2 2 0 0 1-1.995-1.858L5 6"/>
+        </svg>
+      </button>
+    </div>
+    <div class="tool-group">
+      <button id="voiceBtn" class="tool-btn voice-btn" title="Voice command">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/>
+          <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+          <line x1="12" x2="12" y1="19" y2="22"/>
+        </svg>
+      </button>
+      <button id="sendBtn" class="tool-btn send-btn" title="Send annotation">
+        Send
+      </button>
+    </div>
+  </div>
+
+  <script src="js/websocket.js"></script>
+  <script src="js/sketch.js"></script>
+  <script src="js/voice.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

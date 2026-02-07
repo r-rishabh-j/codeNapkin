@@ -1,0 +1,78 @@
+{
+  "name": "sketchcode",
+  "displayName": "SketchCode",
+  "description": "Bridge Claude Code with your phone for code annotation via sketching and voice",
+  "version": "0.1.0",
+  "publisher": "sketchcode-team",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/r-rishabh-j/sketchcode-snapdragon"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "sketchcode.startSession",
+        "title": "SketchCode: Start Session"
+      },
+      {
+        "command": "sketchcode.stopSession",
+        "title": "SketchCode: Stop Session"
+      },
+      {
+        "command": "sketchcode.showQrCode",
+        "title": "SketchCode: Show QR Code"
+      },
+      {
+        "command": "sketchcode.showAnnotation",
+        "title": "SketchCode: Show Latest Annotation"
+      }
+    ],
+    "configuration": {
+      "title": "SketchCode",
+      "properties": {
+        "sketchcode.port": {
+          "type": "number",
+          "default": 9876,
+          "description": "Port for the SketchCode server"
+        },
+        "sketchcode.stateFilePath": {
+          "type": "string",
+          "default": "",
+          "description": "Custom path for shared state file (default: ~/.sketchcode/state.json)"
+        }
+      }
+    }
+  },
+  "activationEvents": [],
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "build": "npm run build:extension && npm run build:mcp",
+    "build:extension": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node",
+    "build:mcp": "esbuild mcp-server/index.ts --bundle --outfile=dist/mcp-server/index.js --format=esm --platform=node --banner:js=\"import{createRequire}from'module';const require=createRequire(import.meta.url);\"",
+    "watch": "npm run build:extension -- --watch",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "ws": "^8.16.0",
+    "qrcode": "^1.5.3",
+    "uuid": "^9.0.0",
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "zod": "^3.22.0"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@types/ws": "^8.5.10",
+    "@types/qrcode": "^1.5.5",
+    "@types/uuid": "^9.0.7",
+    "typescript": "^5.3.3",
+    "esbuild": "^0.19.0",
+    "vitest": "^1.0.0"
+  }
+}
