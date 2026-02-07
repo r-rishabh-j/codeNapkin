@@ -6,6 +6,8 @@ import { log, logError } from '../utils/logger';
 
 let claudeTerminal: vscode.Terminal | null = null;
 let mcpConfigPath: string | null = null;
+let configPath: string | null = null;
+let workspaceCwd: string | null = null;
 
 /**
  * Write a temporary MCP config JSON that points to our bundled MCP server.
@@ -17,7 +19,7 @@ function writeMcpConfig(extensionPath: string): string {
   if (!fs.existsSync(configDir)) {
     fs.mkdirSync(configDir, { recursive: true });
   }
-  const configPath = path.join(configDir, 'mcp-config.json');
+  const cfgPath = path.join(configDir, 'mcp-config.json');
   const config = {
     mcpServers: {
       sketchcode: {
@@ -26,16 +28,15 @@ function writeMcpConfig(extensionPath: string): string {
       },
     },
   };
-  fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
-  mcpConfigPath = configPath;
-  log(`MCP config written to ${configPath}`);
-  return configPath;
+  fs.writeFileSync(cfgPath, JSON.stringify(config, null, 2), 'utf-8');
+  mcpConfigPath = cfgPath;
+  log(`MCP config written to ${cfgPath}`);
+  return cfgPath;
 }
 
 /**
- * Start Claude Code as a child process in a VSCode terminal.
- * Claude runs interactively so the user can see its output and interact.
- * We pass --mcp-config so it has access to SketchCode tools.
+ * Start a long-running interactive Claude Code session in a terminal.
+ * The user types prompts and hits enter to execute.
  */
 export function startClaudeCode(extensionPath: string): void {
   if (claudeTerminal) {
@@ -43,45 +44,23 @@ export function startClaudeCode(extensionPath: string): void {
     return;
   }
 
-  const configPath = writeMcpConfig(extensionPath);
+  configPath = writeMcpConfig(extensionPath);
+  workspaceCwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || os.homedir();
 
-  // Get the workspace folder to use as cwd
-  const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || os.homedir();
-
-  // Build the system prompt that tells Claude about SketchCode
-  const systemPrompt = [
-    'You are working with SketchCode — a phone-based code annotation system.',
-    'You have access to SketchCode MCP tools:',
-    '- get_pending_annotation: Gets the latest sketch annotation (image + voice) from the phone. Call this when notified.',
-    '- get_current_code: Gets the current file open in the editor.',
-    '- get_session_status: Checks if the phone is connected.',
-    '- send_code_to_phone: Pushes updated code to the phone display.',
-    '',
-    'When you receive a message about a new annotation, call get_pending_annotation to see the sketch and voice command,',
-    'then make the requested code changes to the file indicated. After editing, the phone will auto-update.',
-  ].join(' ');
-
-  // Create a terminal running Claude with our MCP config
   claudeTerminal = vscode.window.createTerminal({
     name: 'SketchCode — Claude',
-    cwd: workspaceFolder,
+    cwd: workspaceCwd,
     env: {
-      // Ensure Claude can find the state file
       SKETCHCODE_STATE_PATH: path.join(os.homedir(), '.sketchcode', 'state.json'),
     },
   });
 
-  // Send the claude command to the terminal
-  const claudeCmd = [
-    'claude',
-    '--mcp-config', JSON.stringify(configPath),
-    '--append-system-prompt', JSON.stringify(systemPrompt),
-  ].join(' ');
-
-  claudeTerminal.sendText(claudeCmd);
   claudeTerminal.show(true); // true = preserve focus on editor
 
-  // Listen for terminal close to clean up our reference
+  // Launch interactive claude with MCP config
+  claudeTerminal.sendText(`claude --mcp-config ${JSON.stringify(configPath)}`);
+
+  // Listen for terminal close to clean up
   const disposable = vscode.window.onDidCloseTerminal((t) => {
     if (t === claudeTerminal) {
       claudeTerminal = null;
@@ -90,20 +69,23 @@ export function startClaudeCode(extensionPath: string): void {
     }
   });
 
-  log(`Claude Code started in terminal (cwd: ${workspaceFolder})`);
+  log(`Claude Code terminal ready (cwd: ${workspaceCwd})`);
 }
 
 /**
- * Send a prompt to the running Claude Code terminal.
- * Used to notify Claude when a new annotation arrives.
+ * Type a message into the Claude terminal for the user to review and send.
+ * Does NOT press enter — the user decides when to execute.
  */
 export function sendToClaudeCode(message: string): void {
   if (!claudeTerminal) {
     log('Cannot send to Claude Code — terminal not running');
     return;
   }
-  claudeTerminal.sendText(message);
-  log(`Sent to Claude Code: ${message.substring(0, 80)}...`);
+
+  // Type the message into the terminal without pressing enter (false = no newline)
+  claudeTerminal.sendText(message, false);
+  claudeTerminal.show(true);
+  log(`Typed prompt into Claude terminal (waiting for user to press enter)`);
 }
 
 /**
@@ -111,21 +93,12 @@ export function sendToClaudeCode(message: string): void {
  */
 export function stopClaudeCode(): void {
   if (claudeTerminal) {
-    // Send /exit to cleanly quit Claude, then dispose the terminal
     try {
-      claudeTerminal.sendText('/exit');
+      claudeTerminal.dispose();
     } catch {
-      // terminal might already be dead
+      // already disposed
     }
-    // Give Claude a moment to exit, then force-dispose
-    setTimeout(() => {
-      try {
-        claudeTerminal?.dispose();
-      } catch {
-        // already disposed
-      }
-      claudeTerminal = null;
-    }, 1000);
+    claudeTerminal = null;
     log('Claude Code terminal stopped');
   }
 
@@ -138,6 +111,8 @@ export function stopClaudeCode(): void {
     }
     mcpConfigPath = null;
   }
+  configPath = null;
+  workspaceCwd = null;
 }
 
 /**

@@ -3,6 +3,7 @@ package com.sketchcode.app.ui.components
 import android.content.Context
 import android.graphics.*
 import android.util.AttributeSet
+import android.util.Log
 import android.view.MotionEvent
 import android.view.View
 
@@ -146,6 +147,27 @@ class SketchCanvasView @JvmOverloads constructor(
 
     /** Check if there are any drawings */
     fun hasDrawings(): Boolean = strokes.isNotEmpty()
+
+    /**
+     * Get the bounding rectangle of all strokes (annotation region).
+     * Returns null if no strokes exist.
+     */
+    fun getAnnotationBounds(): RectF? {
+        if (strokes.isEmpty()) return null
+        var minX = Float.MAX_VALUE
+        var minY = Float.MAX_VALUE
+        var maxX = Float.MIN_VALUE
+        var maxY = Float.MIN_VALUE
+        for (stroke in strokes) {
+            for (pt in stroke.points) {
+                if (pt.x < minX) minX = pt.x
+                if (pt.y < minY) minY = pt.y
+                if (pt.x > maxX) maxX = pt.x
+                if (pt.y > maxY) maxY = pt.y
+            }
+        }
+        return RectF(minX, minY, maxX, maxY)
+    }
 
     /**
      * Capture the full bitmap of this view (just the strokes, transparent background).

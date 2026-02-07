@@ -13,7 +13,7 @@ export function getSessionStatus(): {
   const status = {
     sessionActive: state.sessionActive,
     phoneConnected: state.phoneConnected,
-    hasPendingAnnotation: state.pendingAnnotation !== null,
+    pendingAnnotations: state.pendingAnnotations?.length || 0,
     currentFile: state.currentCode?.filename || 'none',
     lastUpdated: new Date(state.lastUpdated).toISOString(),
   };
@@ -24,7 +24,7 @@ export function getSessionStatus(): {
       text: `## SketchCode Session Status
 - **Session Active**: ${status.sessionActive}
 - **Phone Connected**: ${status.phoneConnected}
-- **Pending Annotation**: ${status.hasPendingAnnotation}
+- **Pending Annotations**: ${status.pendingAnnotations}
 - **Current File**: ${status.currentFile}
 - **Last Updated**: ${status.lastUpdated}`,
     }],

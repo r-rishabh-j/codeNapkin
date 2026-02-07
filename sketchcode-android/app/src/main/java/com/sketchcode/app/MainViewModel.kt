@@ -99,9 +99,9 @@ class MainViewModel : ViewModel() {
 
         viewModelScope.launch {
             try {
-                // Convert bitmap to base64 PNG
+                // Convert bitmap to base64 JPEG (much smaller than PNG for screenshots)
                 val baos = ByteArrayOutputStream()
-                bitmap.compress(Bitmap.CompressFormat.PNG, 100, baos)
+                bitmap.compress(Bitmap.CompressFormat.JPEG, 80, baos)
                 val base64 = Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP)
 
                 client?.sendAnnotation(

@@ -3,11 +3,15 @@ package com.sketchcode.app.ui.screens
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color as AndroidColor
+import android.graphics.Rect
 import android.graphics.Typeface
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.roundToInt
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -277,10 +281,8 @@ fun SketchScreen(
                 // SEND button
                 Button(
                     onClick = {
-                        // Capture the full inner frame (code + annotations at full content height)
-                        // not just the visible viewport, so all annotations are included
                         innerFrameRef?.let { frame ->
-                            val bitmap = captureFullContent(frame)
+                            val bitmap = captureFullContent(frame, sketchViewRef)
                             if (bitmap != null) {
                                 onSend(bitmap, voiceState.transcription)
                                 sketchViewRef?.clearCanvas()
@@ -332,20 +334,51 @@ private fun ToolChip(
 }
 
 /**
- * Capture the full content (code + all annotations) at the inner frame's full height.
- * This renders the entire scrollable content, not just the visible viewport,
- * so annotations above or below the current scroll position are all included.
+ * Capture code + annotations, cropped to the annotated region with context padding.
+ * If no annotations exist, falls back to the visible viewport.
+ * The result is capped at MAX_DIM pixels on any side to stay within API limits.
  */
-private fun captureFullContent(innerFrame: FrameLayout): Bitmap? {
+private fun captureFullContent(innerFrame: FrameLayout, sketchView: SketchCanvasView?): Bitmap? {
     return try {
-        // innerFrame's measured width/height is the FULL content size (not clipped by ScrollView)
         val w = innerFrame.width
         val h = innerFrame.height
         if (w <= 0 || h <= 0) return null
-        val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(bitmap)
+
+        // Render the full content to a bitmap
+        val fullBitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(fullBitmap)
         innerFrame.draw(canvas)
-        bitmap
+
+        // Crop vertically to annotation region (keep full width for line numbers)
+        val bounds = sketchView?.getAnnotationBounds()
+        val cropped = if (bounds != null) {
+            val pad = 150
+            val cropTop = max(0, (bounds.top - pad).roundToInt())
+            val cropBottom = min(h, (bounds.bottom + pad).roundToInt())
+            val cropH = cropBottom - cropTop
+            if (cropH > 0) {
+                Bitmap.createBitmap(fullBitmap, 0, cropTop, w, cropH)
+            } else {
+                fullBitmap
+            }
+        } else {
+            fullBitmap
+        }
+
+        // Scale down if any dimension exceeds limit (Claude API max is 8000, target well below)
+        val maxDim = 4000
+        val scale = if (cropped.width > maxDim || cropped.height > maxDim) {
+            maxDim.toFloat() / max(cropped.width, cropped.height)
+        } else {
+            1f
+        }
+        if (scale < 1f) {
+            val scaledW = (cropped.width * scale).roundToInt()
+            val scaledH = (cropped.height * scale).roundToInt()
+            Bitmap.createScaledBitmap(cropped, scaledW, scaledH, true)
+        } else {
+            cropped
+        }
     } catch (e: Exception) {
         null
     }

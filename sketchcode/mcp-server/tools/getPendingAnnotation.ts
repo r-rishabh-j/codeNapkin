@@ -11,37 +11,46 @@ export function getPendingAnnotation(): {
     };
   }
 
-  if (!state.pendingAnnotation) {
+  if (!state.pendingAnnotations || state.pendingAnnotations.length === 0) {
     return {
-      content: [{ type: 'text', text: 'No pending annotation. The phone has not sent any sketch annotations yet.' }],
+      content: [{ type: 'text', text: 'No pending annotations. The phone has not sent any sketch annotations yet.' }],
     };
   }
 
-  const ann = state.pendingAnnotation;
+  const annotations = state.pendingAnnotations;
   const content: Array<{ type: string; text?: string; data?: string; mimeType?: string }> = [];
 
-  // Return the sketch image so Claude can visually interpret annotations
-  content.push({
-    type: 'image',
-    data: ann.sketchImageBase64,
-    mimeType: 'image/png',
-  });
+  // Return all annotations — each with its image and metadata
+  for (let i = 0; i < annotations.length; i++) {
+    const ann = annotations[i];
+    const label = annotations.length > 1 ? ` (${i + 1} of ${annotations.length})` : '';
 
-  // Return text context
-  let textContent = `## Annotation Details\n`;
-  textContent += `- **File**: ${ann.codeFilename}\n`;
-  textContent += `- **Timestamp**: ${new Date(ann.timestamp).toISOString()}\n\n`;
+    content.push({
+      type: 'image',
+      data: ann.sketchImageBase64,
+      mimeType: 'image/jpeg',
+    });
 
-  if (ann.voiceTranscription) {
-    textContent += `## Voice Command\n${ann.voiceTranscription}\n\n`;
+    let textContent = `## Annotation${label}\n`;
+    textContent += `- **File**: ${ann.codeFilename}\n`;
+    textContent += `- **Timestamp**: ${new Date(ann.timestamp).toISOString()}\n`;
+    if (ann.voiceTranscription) {
+      textContent += `- **Voice Command**: ${ann.voiceTranscription}\n`;
+    }
+    textContent += '\n';
+
+    content.push({ type: 'text', text: textContent });
   }
 
-  textContent += `## Code Content (${ann.codeFilename})\n\`\`\`\n${ann.codeContent}\n\`\`\`\n`;
+  // Append code content once (from the first annotation — they share the same file)
+  const first = annotations[0];
+  content.push({
+    type: 'text',
+    text: `## Code Content (${first.codeFilename})\n\`\`\`\n${first.codeContent}\n\`\`\`\n`,
+  });
 
-  content.push({ type: 'text', text: textContent });
-
-  // Mark annotation as consumed so Claude doesn't re-read the same one
-  state.pendingAnnotation = null;
+  // Clear all consumed annotations
+  state.pendingAnnotations = [];
   writeState(state);
 
   return { content };

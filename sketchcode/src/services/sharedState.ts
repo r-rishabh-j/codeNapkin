@@ -22,7 +22,7 @@ export function getDefaultState(sessionId: string): SharedState {
     sessionId,
     extensionPid: process.pid,
     currentCode: null,
-    pendingAnnotation: null,
+    pendingAnnotations: [],
     phoneConnected: false,
     commandQueue: [],
     lastUpdated: Date.now(),
@@ -52,7 +52,7 @@ export function cleanupStaleState(): void {
     log('Found stale session state (PID dead), cleaning up');
     state.sessionActive = false;
     state.phoneConnected = false;
-    state.pendingAnnotation = null;
+    state.pendingAnnotations = [];
     state.commandQueue = [];
     writeState(state);
   }
@@ -138,7 +138,7 @@ export function cleanupState(): void {
     if (state) {
       state.sessionActive = false;
       state.phoneConnected = false;
-      state.pendingAnnotation = null;
+      state.pendingAnnotations = [];
       writeState(state);
     }
   }

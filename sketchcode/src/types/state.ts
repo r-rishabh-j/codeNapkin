@@ -16,14 +16,14 @@ export interface SharedState {
     lineCount: number;
   } | null;
 
-  pendingAnnotation: {
+  pendingAnnotations: Array<{
     id: string;
     sketchImageBase64: string;
     voiceTranscription: string;
     codeFilename: string;
     codeContent: string;
     timestamp: number;
-  } | null;
+  }>;
 
   phoneConnected: boolean;
 

@@ -9,6 +9,7 @@ import { annotationStore } from '../services/annotationStore';
 import {
   initSharedState,
   writeState,
+  readState,
   getDefaultState,
   startCommandPolling,
 } from '../services/sharedState';
@@ -77,6 +78,9 @@ export async function startSession(extensionPath: string): Promise<void> {
     st.sessionActive = true;
     st.phoneConnected = false;
     st.currentCode = currentCodeState;
+    // Preserve pending annotations — Claude may still be processing them
+    const existing = readState();
+    st.pendingAnnotations = existing?.pendingAnnotations || [];
     writeState(st);
   });
 
@@ -94,34 +98,36 @@ export async function startSession(extensionPath: string): Promise<void> {
       codeSnapshot: snapshot,
     });
 
-    // Update shared state with pending annotation
+    // Append to pending annotations array (don't overwrite previous ones)
+    const existing = readState();
     const st = getDefaultState(sessionId!);
     st.sessionActive = true;
     st.phoneConnected = wsServer!.isPhoneConnected();
     st.currentCode = currentCodeState;
-    st.pendingAnnotation = {
+    st.pendingAnnotations = existing?.pendingAnnotations || [];
+    st.pendingAnnotations.push({
       id: annotation.id,
       sketchImageBase64: annotation.sketchImageBase64,
       voiceTranscription: annotation.voiceTranscription,
       codeFilename: annotation.codeSnapshot.filename,
       codeContent: annotation.codeSnapshot.code,
       timestamp: annotation.timestamp,
-    };
+    });
     writeState(st);
 
     // Show annotation in VSCode
     showAnnotationPanel(annotation);
 
-    // Automatically notify Claude Code about the new annotation
+    // Type prompt into Claude terminal — user presses enter when ready
     const voiceHint = annotation.voiceTranscription
       ? ` The user said: "${annotation.voiceTranscription}".`
       : '';
     sendToClaudeCode(
-      `A new annotation was just received for file "${snapshot.filename}".${voiceHint} ` +
-      `Call the get_pending_annotation tool to see the annotated screenshot and make the requested changes.`
+      `New annotation received for "${snapshot.filename}".${voiceHint} ` +
+      `Call get_pending_annotation to see the annotated screenshot(s) and make the requested changes.`
     );
 
-    vscode.window.showInformationMessage('SketchCode: Annotation sent to Claude Code');
+    vscode.window.showInformationMessage('SketchCode: Annotation ready — press Enter in Claude terminal to execute');
   });
 
   // Listen for editor changes (live sync)
@@ -185,16 +191,9 @@ function sendCodeUpdate(): void {
     st.sessionActive = true;
     st.phoneConnected = wsServer.isPhoneConnected();
     st.currentCode = currentCodeState;
-    st.pendingAnnotation = annotationStore.getPending()
-      ? {
-          id: annotationStore.getPending()!.id,
-          sketchImageBase64: annotationStore.getPending()!.sketchImageBase64,
-          voiceTranscription: annotationStore.getPending()!.voiceTranscription,
-          codeFilename: annotationStore.getPending()!.codeSnapshot.filename,
-          codeContent: annotationStore.getPending()!.codeSnapshot.code,
-          timestamp: annotationStore.getPending()!.timestamp,
-        }
-      : null;
+    // Preserve pending annotations from state (don't rebuild from store — store is append-only)
+    const existingState = readState();
+    st.pendingAnnotations = existingState?.pendingAnnotations || [];
     writeState(st);
   }
 }
