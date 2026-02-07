@@ -16,14 +16,39 @@
   ],
   "main": "./dist/extension.js",
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "sketchcode-sidebar",
+          "title": "SketchCode",
+          "icon": "resources/sketchcode-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "sketchcode-sidebar": [
+        {
+          "id": "sketchcode.sessionView",
+          "name": "Session"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "sketchcode.sessionView",
+        "contents": "Start a SketchCode session to connect your phone.\n[Start Session](command:sketchcode.startSession)"
+      }
+    ],
     "commands": [
       {
         "command": "sketchcode.startSession",
-        "title": "SketchCode: Start Session"
+        "title": "SketchCode: Start Session",
+        "icon": "$(play)"
       },
       {
         "command": "sketchcode.stopSession",
-        "title": "SketchCode: Stop Session"
+        "title": "SketchCode: Stop Session",
+        "icon": "$(debug-stop)"
       },
       {
         "command": "sketchcode.showQrCode",
@@ -34,6 +59,20 @@
         "title": "SketchCode: Show Latest Annotation"
       }
     ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "sketchcode.startSession",
+          "when": "view == sketchcode.sessionView && !sketchcode.sessionActive",
+          "group": "navigation"
+        },
+        {
+          "command": "sketchcode.stopSession",
+          "when": "view == sketchcode.sessionView && sketchcode.sessionActive",
+          "group": "navigation"
+        }
+      ]
+    },
     "configuration": {
       "title": "SketchCode",
       "properties": {

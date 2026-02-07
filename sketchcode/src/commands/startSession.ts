@@ -19,6 +19,7 @@ import { showAnnotationPanel } from '../webview/annotationPanel';
 import { getPort, getStateFilePath } from '../utils/config';
 import { log } from '../utils/logger';
 import { AnnotationMessage, CodeUpdateMessage } from '../types';
+import { getSessionTreeProvider } from '../extension';
 
 let wsServer: SketchCodeWSServer | null = null;
 let editorChangeDisposable: vscode.Disposable | null = null;
@@ -58,6 +59,7 @@ export async function startSession(extensionPath: string): Promise<void> {
   wsServer.on('phone_connected', () => {
     log('Phone connected');
     updateQrPanelStatus(true);
+    getSessionTreeProvider()?.setPhoneConnected(true);
 
     // Update shared state
     const st = getDefaultState(sessionId!);
@@ -73,6 +75,7 @@ export async function startSession(extensionPath: string): Promise<void> {
   wsServer.on('phone_disconnected', () => {
     log('Phone disconnected');
     updateQrPanelStatus(false);
+    getSessionTreeProvider()?.setPhoneConnected(false);
 
     const st = getDefaultState(sessionId!);
     st.sessionActive = true;

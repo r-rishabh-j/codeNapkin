@@ -1,0 +1,11 @@
+{
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "sketchcode"
+  ],
+  "permissions": {
+    "allow": [
+      "mcp__sketchcode__get_pending_annotation"
+    ]
+  }
+}
