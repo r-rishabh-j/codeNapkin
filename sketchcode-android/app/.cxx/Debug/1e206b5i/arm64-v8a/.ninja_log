@@ -1,0 +1,5 @@
+# ninja log v5
+0	459	1770440844970414803	CMakeFiles/whisper_mel.dir/mel_spectrogram.cpp.o	b97b4e96920a399c
+460	525	1770440845037531592	/Users/rishabh/development/hackathon/jarvis/sketchcode-android/app/build/intermediates/cxx/Debug/1e206b5i/obj/arm64-v8a/libwhisper_mel.so	d457dd4058ced24a
+1	776	1770446694333651545	CMakeFiles/whisper_mel.dir/mel_spectrogram.cpp.o	b97b4e96920a399c
+776	965	1770446694525095397	/Users/rishabh/development/hackathon/jarvis/sketchcode-android/app/build/intermediates/cxx/Debug/1e206b5i/obj/arm64-v8a/libwhisper_mel.so	d457dd4058ced24a

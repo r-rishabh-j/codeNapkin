@@ -1,0 +1,1 @@
+/Users/rishabh/development/hackathon/jarvis/sketchcode-android/app/src/main/cpp/CMakeLists.txt

@@ -1,0 +1,1 @@
+/Users/rishabh/development/hackathon/jarvis/sketchcode-android/app/build/intermediates/cxx/Debug/1e206b5i/obj/arm64-v8a

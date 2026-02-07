@@ -13,6 +13,16 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "0.1.0"
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
 
     buildFeatures {
@@ -35,6 +45,12 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
+        }
+    }
+
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
         }
     }
 }
@@ -69,6 +85,9 @@ dependencies {
 
     // Gson for JSON
     implementation("com.google.code.gson:gson:2.10.1")
+
+    // ONNX Runtime with Qualcomm QNN Execution Provider (includes HTP/NPU libs)
+    implementation("com.microsoft.onnxruntime:onnxruntime-android-qnn:1.24.1")
 
     // Core
     implementation("androidx.core:core-ktx:1.13.1")

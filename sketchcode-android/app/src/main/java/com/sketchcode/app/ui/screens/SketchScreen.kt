@@ -157,26 +157,35 @@ fun SketchScreen(
                 .fillMaxWidth()
         )
 
-        // ── Voice transcription bar ──
-        if (voiceState.isRecording || voiceState.transcription.isNotEmpty()) {
+        // ── Voice transcription / status bar ──
+        if (voiceState.isRecording || voiceState.transcription.isNotEmpty()
+            || voiceState.interimText.isNotEmpty() || voiceState.error != null) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(
-                        if (voiceState.isRecording) Color(0xFF3B1A1A) else Color(0xFF2D2D30)
+                        when {
+                            voiceState.error != null -> Color(0xFF4A1A1A)
+                            voiceState.isRecording -> Color(0xFF3B1A1A)
+                            else -> Color(0xFF2D2D30)
+                        }
                     )
                     .padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("🎙", fontSize = 16.sp)
+                Text(
+                    if (voiceState.error != null) "⚠️" else "🎙",
+                    fontSize = 16.sp
+                )
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    text = if (voiceState.isRecording) {
-                        voiceState.interimText.ifEmpty { "Listening..." }
-                    } else {
-                        voiceState.transcription
+                    text = when {
+                        voiceState.error != null -> voiceState.error
+                        voiceState.isRecording -> voiceState.interimText.ifEmpty { "Listening..." }
+                        voiceState.interimText.isNotEmpty() -> voiceState.interimText
+                        else -> voiceState.transcription
                     },
-                    color = Color(0xFFD4D4D4),
+                    color = if (voiceState.error != null) Color(0xFFEF4444) else Color(0xFFD4D4D4),
                     fontSize = 13.sp,
                     modifier = Modifier.weight(1f)
                 )
