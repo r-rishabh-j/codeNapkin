@@ -47,6 +47,7 @@ fun SketchScreen(
     // Native view references
     var sketchViewRef by remember { mutableStateOf<SketchCanvasView?>(null) }
     var containerRef by remember { mutableStateOf<FrameLayout?>(null) }
+    var innerFrameRef by remember { mutableStateOf<FrameLayout?>(null) }
 
     // Push tool/color changes to the native view
     LaunchedEffect(currentTool, penColor) {
@@ -103,7 +104,8 @@ fun SketchScreen(
                         ViewGroup.LayoutParams.MATCH_PARENT
                     )
 
-                    // Layer 1: ScrollView with code TextView
+                    // ScrollView contains BOTH the code text and the sketch canvas
+                    // inside a FrameLayout, so annotations scroll with the code.
                     val codeText = TextView(context).apply {
                         setTextColor(AndroidColor.parseColor("#D4D4D4"))
                         setBackgroundColor(AndroidColor.parseColor("#1E1E1E"))
@@ -113,6 +115,25 @@ fun SketchScreen(
                         setLineSpacing(0f, 1.3f)
                         tag = "codeText"
                     }
+
+                    // Inner FrameLayout: code + canvas stacked, both same height
+                    val sketchView = SketchCanvasView(context).apply {
+                        layoutParams = FrameLayout.LayoutParams(
+                            FrameLayout.LayoutParams.MATCH_PARENT,
+                            FrameLayout.LayoutParams.MATCH_PARENT
+                        )
+                    }
+
+                    val innerFrame = FrameLayout(context).apply {
+                        layoutParams = ViewGroup.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT
+                        )
+                        tag = "innerFrame"
+                        addView(codeText)
+                        addView(sketchView)
+                    }
+
                     val scrollView = ScrollView(context).apply {
                         layoutParams = FrameLayout.LayoutParams(
                             FrameLayout.LayoutParams.MATCH_PARENT,
@@ -120,21 +141,13 @@ fun SketchScreen(
                         )
                         isVerticalScrollBarEnabled = true
                         tag = "scrollView"
-                        addView(codeText)
+                        addView(innerFrame)
                     }
                     addView(scrollView)
 
-                    // Layer 2: SketchCanvasView on top (transparent, handles touch)
-                    val sketchView = SketchCanvasView(context).apply {
-                        layoutParams = FrameLayout.LayoutParams(
-                            FrameLayout.LayoutParams.MATCH_PARENT,
-                            FrameLayout.LayoutParams.MATCH_PARENT
-                        )
-                    }
-                    addView(sketchView)
-
                     sketchViewRef = sketchView
                     containerRef = this
+                    innerFrameRef = innerFrame
                 }
             },
             update = { frameLayout ->
@@ -260,8 +273,10 @@ fun SketchScreen(
                 // SEND button
                 Button(
                     onClick = {
-                        containerRef?.let { container ->
-                            val bitmap = captureContainerBitmap(container)
+                        // Capture the full inner frame (code + annotations at full content height)
+                        // not just the visible viewport, so all annotations are included
+                        innerFrameRef?.let { frame ->
+                            val bitmap = captureFullContent(frame)
                             if (bitmap != null) {
                                 onSend(bitmap, voiceState.transcription)
                                 sketchViewRef?.clearCanvas()
@@ -312,11 +327,20 @@ private fun ToolChip(
     }
 }
 
-private fun captureContainerBitmap(container: FrameLayout): Bitmap? {
+/**
+ * Capture the full content (code + all annotations) at the inner frame's full height.
+ * This renders the entire scrollable content, not just the visible viewport,
+ * so annotations above or below the current scroll position are all included.
+ */
+private fun captureFullContent(innerFrame: FrameLayout): Bitmap? {
     return try {
-        val bitmap = Bitmap.createBitmap(container.width, container.height, Bitmap.Config.ARGB_8888)
+        // innerFrame's measured width/height is the FULL content size (not clipped by ScrollView)
+        val w = innerFrame.width
+        val h = innerFrame.height
+        if (w <= 0 || h <= 0) return null
+        val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
-        container.draw(canvas)
+        innerFrame.draw(canvas)
         bitmap
     } catch (e: Exception) {
         null
